@@ -77,6 +77,17 @@ func NewReaderBuf(r io.Reader, buf []byte) *Reader {
 	return rd
 }
 
+// NewReaderStatic returns a new *Reader that
+// reads directly from 'source' without
+// buffering. It is assumed that 'source'
+// is not modified during the lifetime of the reader,
+// or until the first Reset.
+func NewReaderStatic(source []byte) *Reader {
+	return &Reader{
+		data: source,
+	}
+}
+
 // Reader is a buffered look-ahead reader
 type Reader struct {
 	r io.Reader // underlying reader
@@ -107,6 +118,10 @@ func (r *Reader) Reset(rd io.Reader) {
 
 // more() does one read on the underlying reader
 func (r *Reader) more() {
+	if r.r == nil {
+		r.state = io.EOF
+		return
+	}
 	// move data backwards so that
 	// the read offset is 0; this way
 	// we can supply the maximum number of
@@ -169,7 +184,7 @@ func (r *Reader) Peek(n int) ([]byte, error) {
 	// we may need to realloc
 	// (the caller asked for more
 	// bytes than the size of the buffer)
-	if cap(r.data) < n {
+	if r.r != nil && cap(r.data) < n {
 		old := r.data[r.n:]
 		r.data = make([]byte, n+r.buffered())
 		r.data = r.data[:copy(r.data, old)]
@@ -196,6 +211,10 @@ func (r *Reader) Peek(n int) ([]byte, error) {
 func (r *Reader) discard(n int) int {
 	inbuf := r.buffered()
 	if inbuf <= n {
+		if r.r == nil {
+			r.n += inbuf
+			return inbuf
+		}
 		r.n = 0
 		r.data = r.data[:0]
 		return inbuf
@@ -250,7 +269,7 @@ func (r *Reader) Skip(n int) (int, error) {
 // and the reader position will not be incremented.
 func (r *Reader) Next(n int) ([]byte, error) {
 	// in case the buffer is too small
-	if cap(r.data) < n {
+	if r.r != nil && cap(r.data) < n {
 		old := r.data[r.n:]
 		r.data = make([]byte, n+r.buffered())
 		r.data = r.data[:copy(r.data, old)]
@@ -278,6 +297,9 @@ func (r *Reader) Read(b []byte) (int, error) {
 		x := copy(b, r.data[r.n:])
 		r.n += x
 		return x, nil
+	}
+	if r.r == nil {
+		return 0, io.EOF
 	}
 	var n int
 	// we have no buffered data; determine
@@ -312,6 +334,9 @@ func (r *Reader) ReadFull(b []byte) (int, error) {
 			nn = copy(b[n:], r.data[r.n:])
 			n += nn
 			r.n += nn
+		} else if r.r == nil {
+			r.state = io.EOF
+			break
 		} else if l-n > cap(r.data) {
 			nn, r.state = r.r.Read(b[n:])
 			n += nn
@@ -352,6 +377,9 @@ func (r *Reader) WriteTo(w io.Writer) (int64, error) {
 		if err != nil {
 			return i, err
 		}
+		if r.r == nil {
+			return i, nil
+		}
 		r.data = r.data[0:0]
 		r.n = 0
 	}
@@ -381,3 +409,4 @@ func max(a int, b int) int {
 	}
 	return a
 }
+
